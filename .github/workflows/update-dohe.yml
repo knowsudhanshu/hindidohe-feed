@@ -1,0 +1,61 @@
+name: Update dohe from Facebook
+
+on:
+  schedule:
+    - cron: '17 */6 * * *'   # every 6 hours (UTC); ~4 Graph API calls/day
+  workflow_dispatch: {}       # "Run workflow" button for a manual refresh
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: update-dohe
+  cancel-in-progress: false
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: Unit tests
+        run: npm test
+      - name: Fetch dohe via Graph API (fails, and publishes nothing, without a valid token)
+        env:
+          FB_SYSTEM_USER_TOKEN: ${{ secrets.FB_SYSTEM_USER_TOKEN }}
+          FB_APP_SECRET: ${{ secrets.FB_APP_SECRET }}
+        run: node scripts/fetch-dohe.mjs
+      - name: Commit changes (and keep the schedule alive)
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ -n "$(git status --porcelain -- public/dohe.json)" ]; then
+            git add public/dohe.json
+            git commit -m "Update dohe ($(date -u +%Y-%m-%d))"
+          elif [ "$(git log -1 --format=%ct)" -lt "$(date -d '45 days ago' +%s)" ]; then
+            # GitHub disables scheduled workflows after 60 days without repository activity.
+            git commit --allow-empty -m "Keep scheduled refresh active"
+          fi
+          git push
+  deploy:
+    needs: fetch
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.ref_name }}
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: public
+      - id: deployment
+        uses: actions/deploy-pages@v5
